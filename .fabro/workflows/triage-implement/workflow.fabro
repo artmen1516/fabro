@@ -1,0 +1,26 @@
+digraph TriageImplement {
+    graph [goal="Find an easy bug in fabro-sh/fabro, plan and implement its fix, and publish a pull request", rankdir=LR, default_max_retries=0]
+
+    start [shape=Mdiamond, label="Start"]
+    exit [shape=Msquare, label="Exit"]
+
+    scout [label="Scout issues", prompt="Use the gh CLI to look for an easy bug to fix in fabro-sh/fabro. Run:\n\ngh issue list --repo fabro-sh/fabro --state open --limit 30 --json number,title,labels,body\n\nFilter to issues labeled 'bug' (or small unlabeled fixes). Score each candidate 1-5 for implementation ease: small scope, clear reproduction, testable, no architectural debate. Pick the single best candidate and read its full body plus any linked discussion. If no issue scores 3 or higher, print 'no suitable issue this hour' and exit with outcome=failed."]
+    plan [label="Plan the fix", prompt="For the issue selected by the scout stage (its number, title, body and discussion are in the previous stage's output): read the relevant source files in this repository and produce a concrete implementation plan — files to change, the approach, and tests to add or update. Keep the scope minimal: one focused fix per pull request. Verify your plan against the coding conventions in .fabro/skills/rust-style-guide."]
+    gate [shape=hexagon, label="Approve implementing the issue"]
+    implement [label="Implement the fix", reasoning_effort="high", max_visits="3", prompt="Implement the plan produced earlier for the selected issue, following .fabro/skills/rust-style-guide. Use red/green TDD: add or update tests first, then the fix. Keep the diff minimal and focused on the issue. Do not open pull requests, do not merge, do not touch unrelated files."]
+    verify [label="Verify", shape=parallelogram, script="cargo check -q --workspace 2>&1 && cargo clippy -q --workspace --all-targets -- -D warnings 2>&1 && cargo test -q --workspace 2>&1", timeout="25m", goal_gate=true, retry_target="fixup"]
+    fixup [label="Fixup", max_visits="3", prompt="The verify step failed. Read the build output from context and fix all compile, clippy, and test failures. Stay within the scope of the fix."]
+    publish [label="Publish the pull request", prompt="The fix is implemented and verified. Create a pull request with gh from the current branch into fabro-sh/fabro's main branch:\n\ngh pr create --repo fabro-sh/fabro --base main --head <current branch> --title 'fix: <issue title> (closes #<issue number>)' --body-file <file>\n\nWrite the body following the repository's .github/pull_request_template.md when present, including the issue reference, the approach summary, and the verification results. Report the pull request URL as your final output."]
+
+    start -> scout
+    scout -> plan [condition="outcome=succeeded"]
+    scout -> exit
+    plan -> gate
+    gate -> implement [label="[A] Approve implementing the issue"]
+    gate -> exit [label="[S] Skip this hour"]
+    implement -> verify
+    verify -> publish [condition="outcome=succeeded"]
+    verify -> fixup
+    fixup -> verify
+    publish -> exit
+}

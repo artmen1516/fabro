@@ -1,0 +1,8 @@
+_version = 1
+
+[run.pull_request]
+enabled = false
+
+[run.integrations.github.permissions]
+contents = "write"
+pull_requests = "write"
