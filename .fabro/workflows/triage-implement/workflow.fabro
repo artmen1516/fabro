@@ -1,5 +1,5 @@
 digraph TriageImplement {
-    graph [goal="Find an easy bug in fabro-sh/fabro, plan and implement its fix, and publish a pull request", rankdir=LR, default_max_retries=0]
+    graph [rankdir=LR, default_max_retries=0]
 
     start [shape=Mdiamond, label="Start"]
     exit [shape=Msquare, label="Exit"]
