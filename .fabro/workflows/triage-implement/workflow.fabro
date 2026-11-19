@@ -1,5 +1,5 @@
 digraph TriageImplement {
-    graph [rankdir=LR, default_max_retries=0, default_fidelity="full"]
+    graph [rankdir=LR, default_max_retries=0, default_fidelity="summary:high"]
 
     start [shape=Mdiamond, label="Start"]
     exit [shape=Msquare, label="Exit"]
