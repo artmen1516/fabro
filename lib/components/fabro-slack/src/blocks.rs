@@ -146,6 +146,21 @@ fn context_section(context_display: &str) -> Option<Value> {
     Some(text_block(&bounded))
 }
 
+/// A label without its `[K] ` accelerator prefix.
+///
+/// Mirrors `strip_accelerator` in `fabro-petri`'s interview adapter so a
+/// button reads the same thing the engine treats the answer as.
+fn strip_accelerator(label: &str) -> &str {
+    let trimmed = label.trim();
+    match trimmed
+        .strip_prefix('[')
+        .and_then(|rest| rest.split_once(']'))
+    {
+        Some((_, rest)) => rest.trim(),
+        None => trimmed,
+    }
+}
+
 /// Assemble the leading blocks shared by every question shape: header
 /// section + optional context preview + a divider before the buttons.
 fn lead_blocks(question: &Question, run_web_url: Option<&str>) -> Vec<Value> {
@@ -170,7 +185,7 @@ fn option_descriptions_section(question: &Question) -> Option<Value> {
             }
             Some(format!(
                 "• *{}* — {}",
-                escape_slack_controls(&option.label),
+                escape_slack_controls(strip_accelerator(&option.label)),
                 escape_slack_controls(description)
             ))
         })
@@ -227,7 +242,7 @@ pub fn question_to_blocks(
                 .enumerate()
                 .map(|(idx, opt)| {
                     button(
-                        &opt.label,
+                        strip_accelerator(&opt.label),
                         &encode_action_value(&SlackActionPayload::Selected {
                             run_id: run_id.to_string(),
                             qid:    question_id.to_string(),
@@ -248,7 +263,7 @@ pub fn question_to_blocks(
                 .iter()
                 .map(|opt| {
                     let mut option = json!({
-                        "text": { "type": "plain_text", "text": opt.label },
+                        "text": { "type": "plain_text", "text": strip_accelerator(&opt.label) },
                         "value": opt.key
                     });
                     if let Some(description) = opt
@@ -600,6 +615,114 @@ mod tests {
         );
         assert_eq!(elements[1]["text"]["text"], "TypeScript");
         assert_eq!(elements[2]["text"]["text"], "Python");
+    }
+
+    #[test]
+    fn multiple_choice_strips_accelerator_prefix_from_buttons_and_descriptions() {
+        let mut q = Question::new(
+            "Approve implementing the issue?",
+            QuestionType::MultipleChoice,
+        );
+        q.options = vec![
+            InterviewOption {
+                key:         "a".to_string(),
+                label:       "[A] Approve implementing the issue".to_string(),
+                description: Some("Proceed with the plan".to_string()),
+                preview:     None,
+            },
+            InterviewOption {
+                key:         "r".to_string(),
+                label:       "[R] Reject".to_string(),
+                description: None,
+                preview:     None,
+            },
+        ];
+        let blocks_json =
+            serde_json::to_value(question_to_blocks("run-1", "q-8", &q, None)).unwrap();
+
+        // Buttons read the label the way the engine treats the answer: without
+        // the `[K] ` accelerator prefix.
+        let actions = &blocks_json[2];
+        let elements = actions["elements"].as_array().unwrap();
+        assert_eq!(
+            elements[0]["text"]["text"],
+            "Approve implementing the issue"
+        );
+        assert_eq!(elements[1]["text"]["text"], "Reject");
+        // The selection still travels in the button `value` payload by key.
+        assert!(
+            elements[0]["value"]
+                .as_str()
+                .unwrap()
+                .contains("\"key\":\"a\"")
+        );
+
+        // The option-descriptions section strips the prefix too.
+        let descriptions = blocks_json[1]["text"]["text"].as_str().unwrap();
+        assert!(
+            descriptions.contains("• *Approve implementing the issue* — Proceed with the plan")
+        );
+        assert!(!descriptions.contains("[A]"));
+    }
+
+    #[test]
+    fn multi_select_strips_accelerator_prefix_from_option_text() {
+        let mut q = Question::new("Select next steps:", QuestionType::MultiSelect);
+        q.options = vec![InterviewOption {
+            key:         "s".to_string(),
+            label:       "[S] Ship it".to_string(),
+            description: None,
+            preview:     None,
+        }];
+        let blocks_json =
+            serde_json::to_value(question_to_blocks("run-1", "q-9", &q, None)).unwrap();
+
+        let checkboxes = &blocks_json[1]["elements"][0]["options"].as_array().unwrap();
+        assert_eq!(checkboxes[0]["text"]["text"], "Ship it");
+        assert_eq!(checkboxes[0]["value"], "s");
+    }
+
+    #[test]
+    fn labels_without_accelerator_prefix_render_unchanged() {
+        let mut q = Question::new("Pick a language:", QuestionType::MultipleChoice);
+        q.options = vec![
+            InterviewOption {
+                key:         "rs".to_string(),
+                label:       "Rust".to_string(),
+                description: None,
+                preview:     None,
+            },
+            InterviewOption {
+                key:         "u".to_string(),
+                label:       "[Unclosed".to_string(),
+                description: None,
+                preview:     None,
+            },
+        ];
+        let blocks_json =
+            serde_json::to_value(question_to_blocks("run-1", "q-10", &q, None)).unwrap();
+
+        let elements = blocks_json[1]["elements"].as_array().unwrap();
+        assert_eq!(elements[0]["text"]["text"], "Rust");
+        // Mirrors the engine's fall-through: an unclosed bracket is not a
+        // prefix, so the label renders verbatim.
+        assert_eq!(elements[1]["text"]["text"], "[Unclosed");
+    }
+
+    #[test]
+    fn accelerator_prefix_alone_yields_empty_button_text_like_the_engine() {
+        let mut q = Question::new("Pick:", QuestionType::MultipleChoice);
+        q.options = vec![InterviewOption {
+            key:         "k".to_string(),
+            label:       "[K]".to_string(),
+            description: None,
+            preview:     None,
+        }];
+        let blocks_json =
+            serde_json::to_value(question_to_blocks("run-1", "q-11", &q, None)).unwrap();
+
+        let elements = blocks_json[1]["elements"].as_array().unwrap();
+        assert_eq!(elements[0]["text"]["text"], "");
     }
 
     #[test]
