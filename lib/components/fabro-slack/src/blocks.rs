@@ -80,6 +80,58 @@ fn escape_slack_controls(text: &str) -> String {
         .replace('>', "&gt;")
 }
 
+/// An option label as displayed to a reviewer: without the leading
+/// keyboard-accelerator prefix. Matches the web dock's `displayLabel`
+/// (`apps/fabro-web/app/components/interview-label.ts`), which strips
+/// `[K] Label`, `K) Label`, and `K - Label` (the engine's three documented
+/// formats — the engine strips them when matching answers), and falls back
+/// to the trimmed label when stripping would leave it empty (e.g. `[A]`
+/// alone). Values embedded in action payloads keep the original key, so
+/// answer routing is unaffected.
+fn display_label(label: &str) -> &str {
+    let trimmed = label.trim();
+    let mut rest = trimmed;
+
+    // `[K] Rest` — the bracket content must be non-empty; the web regex's
+    // trailing `\s*` also consumes the whitespace after `]`.
+    if let Some((body, after)) = rest.strip_prefix('[').and_then(|body| body.split_once(']')) {
+        if !body.is_empty() {
+            rest = after.trim_start();
+        }
+    }
+
+    // `K) Rest` — the key must be a non-empty ASCII-alphanumeric run; the
+    // web regex's trailing `\s*` also consumes the whitespace after `)`.
+    if let Some((key, after)) = rest.split_once(')') {
+        if !key.is_empty() && key.chars().all(|ch| ch.is_ascii_alphanumeric()) {
+            rest = after.trim_start();
+        }
+    }
+
+    // `K - Rest` — non-empty ASCII-alphanumeric key, optional whitespace,
+    // dash, then at least one whitespace character.
+    let key_end = rest
+        .find(|ch: char| !ch.is_ascii_alphanumeric())
+        .unwrap_or(rest.len());
+    let (key, tail) = rest.split_at(key_end);
+    let after_key = tail.trim_start();
+    if let Some(after) = after_key.strip_prefix('-') {
+        if key_end > 0
+            && after.chars().next().is_some_and(char::is_whitespace)
+            && key.chars().all(|ch| ch.is_ascii_alphanumeric())
+        {
+            rest = after;
+        }
+    }
+
+    let stripped = rest.trim();
+    if stripped.is_empty() {
+        trimmed
+    } else {
+        stripped
+    }
+}
+
 /// Truncate a string to at most `limit` Unicode scalars, appending `suffix`
 /// when truncation occurs. `suffix` is included in the budget so the result
 /// is always `<= limit` characters total.
@@ -170,7 +222,7 @@ fn option_descriptions_section(question: &Question) -> Option<Value> {
             }
             Some(format!(
                 "• *{}* — {}",
-                escape_slack_controls(&option.label),
+                escape_slack_controls(display_label(&option.label)),
                 escape_slack_controls(description)
             ))
         })
@@ -227,7 +279,7 @@ pub fn question_to_blocks(
                 .enumerate()
                 .map(|(idx, opt)| {
                     button(
-                        &opt.label,
+                        display_label(&opt.label),
                         &encode_action_value(&SlackActionPayload::Selected {
                             run_id: run_id.to_string(),
                             qid:    question_id.to_string(),
@@ -248,7 +300,7 @@ pub fn question_to_blocks(
                 .iter()
                 .map(|opt| {
                     let mut option = json!({
-                        "text": { "type": "plain_text", "text": opt.label },
+                        "text": { "type": "plain_text", "text": display_label(&opt.label) },
                         "value": opt.key
                     });
                     if let Some(description) = opt
@@ -488,6 +540,24 @@ mod tests {
     use fabro_types::InterviewOption;
 
     use super::*;
+
+    fn option(key: &str, label: &str) -> InterviewOption {
+        InterviewOption {
+            key:         key.to_string(),
+            label:       label.to_string(),
+            description: None,
+            preview:     None,
+        }
+    }
+
+    fn option_with_description(key: &str, label: &str, description: &str) -> InterviewOption {
+        InterviewOption {
+            key:         key.to_string(),
+            label:       label.to_string(),
+            description: Some(description.to_string()),
+            preview:     None,
+        }
+    }
 
     fn lifecycle_text(blocks: &[Value]) -> String {
         let mut texts = Vec::new();
@@ -938,6 +1008,103 @@ mod tests {
 
         assert!(text.contains("Deploy &lt;now&gt;"));
         assert!(!text.contains("preview should not render"));
+    }
+
+    #[test]
+    fn multiple_choice_button_labels_strip_accelerator_prefix() {
+        let mut q = Question::new("Approve this PR?", QuestionType::MultipleChoice);
+        q.options = vec![
+            option("a", "[A] Approve"),
+            option("b", "B) Approve"),
+            option("c", "C - Approve"),
+            option("d", "Plain label"),
+        ];
+        let blocks = question_to_blocks("run-1", "q-8", &q, None);
+        let blocks_json = serde_json::to_value(&blocks).unwrap();
+
+        let elements = blocks_json[1]["elements"].as_array().unwrap();
+        assert_eq!(elements.len(), 4);
+        let texts: Vec<&str> = elements
+            .iter()
+            .map(|element| element["text"]["text"].as_str().unwrap())
+            .collect();
+        assert_eq!(texts, ["Approve", "Approve", "Approve", "Plain label"]);
+        // The button `value` payloads still carry the original keys so answer
+        // routing is unchanged by the display stripping.
+        for (element, key) in elements.iter().zip(["a", "b", "c", "d"]) {
+            assert!(
+                element["value"]
+                    .as_str()
+                    .unwrap()
+                    .contains(&format!("\"key\":\"{key}\""))
+            );
+        }
+    }
+
+    #[test]
+    fn multi_select_checkbox_labels_strip_accelerator_prefix() {
+        let mut q = Question::new("Select features:", QuestionType::MultiSelect);
+        q.options = vec![
+            option("a", "[A] Auth"),
+            option("b", "B) Billing"),
+            option("c", "C - Cache"),
+        ];
+        let blocks = question_to_blocks("run-1", "q-9", &q, None);
+        let blocks_json = serde_json::to_value(&blocks).unwrap();
+
+        let checkboxes = &blocks_json[1]["elements"][0]["options"];
+        let texts: Vec<&str> = checkboxes
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|option| option["text"]["text"].as_str().unwrap())
+            .collect();
+        assert_eq!(texts, ["Auth", "Billing", "Cache"]);
+    }
+
+    #[test]
+    fn option_descriptions_strip_accelerator_prefix() {
+        let mut q = Question::new("Pick one:", QuestionType::MultipleChoice);
+        q.options = vec![option_with_description("a", "[A] Ship", "Deploy now")];
+        let blocks = question_to_blocks("run-1", "q-10", &q, None);
+        let text = serde_json::to_value(&blocks).unwrap().to_string();
+
+        assert!(text.contains("• *Ship* — Deploy now"));
+        assert!(!text.contains("[A] Ship"));
+    }
+
+    #[test]
+    fn display_label_strips_documented_accelerator_formats() {
+        // Bracketed form — the shape the issue reports.
+        assert_eq!(display_label("[A] Approve"), "Approve");
+        // Paren and dash forms.
+        assert_eq!(display_label("A) Approve"), "Approve");
+        assert_eq!(display_label("A - Approve"), "Approve");
+        // Plain labels pass through unchanged.
+        assert_eq!(display_label("Approve"), "Approve");
+        // Surrounding whitespace is trimmed.
+        assert_eq!(display_label("  [A] Approve  "), "Approve");
+    }
+
+    #[test]
+    fn display_label_edge_cases_fall_back_to_the_label() {
+        // A bare accelerator with no remaining text falls back to the label.
+        assert_eq!(display_label("[A]"), "[A]");
+        // Empty brackets are not an accelerator prefix.
+        assert_eq!(display_label("[] Label"), "[] Label");
+        // Only a *leading* prefix is stripped.
+        assert_eq!(display_label("Approve [v2]"), "Approve [v2]");
+        // The dash form requires a space after the dash (`A - X`, not `A-X`).
+        assert_eq!(display_label("A-Approve"), "A-Approve");
+        // The dash form requires a non-empty alphanumeric key.
+        assert_eq!(display_label("- Approve"), "- Approve");
+        // The paren form does not require a space after the paren.
+        assert_eq!(display_label("A)Approve"), "Approve");
+        // Formats chain: a bracket prefix may expose a second one.
+        assert_eq!(display_label("[A] B) Approve"), "Approve");
+        // Documented parity with the web dock: a leading numeral is treated
+        // as an accelerator key.
+        assert_eq!(display_label("5 - 7 business days"), "7 business days");
     }
 
     #[test]
