@@ -543,6 +543,23 @@ fn log_sink(
 }
 
 #[cfg(test)]
+pub(crate) mod test_support {
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    /// Serializes tests that read or mutate process-global environment
+    /// variables (`FABRO_LOG_DESTINATION` resolvers in `main.rs` and
+    /// `commands::server::start` share this process; without the lock a
+    /// writer's `with_var` leaks into concurrent readers).
+    pub(crate) fn env_lock() -> MutexGuard<'static, ()> {
+        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        ENV_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+#[cfg(test)]
 #[expect(
     clippy::disallowed_methods,
     reason = "main.rs tests stage CLI settings fixtures with sync std::fs::write"
@@ -556,6 +573,8 @@ mod tests {
     use lithos_llm::catalog::{ProviderId, builtin};
     use temp_env::with_var;
     use tokio::runtime::Runtime;
+
+    use crate::test_support::env_lock;
 
     use super::*;
 
@@ -738,6 +757,7 @@ destination = "{destination}"
 
     #[test]
     fn pre_tracing_bootstrap_uses_server_sink_for_server_start_foreground() {
+        let _env = env_lock();
         let storage_dir = tempfile::tempdir().unwrap();
         let config_dir = tempfile::tempdir().unwrap();
         let config_path = config_dir.path().join("settings.toml");
@@ -769,6 +789,7 @@ destination = "{destination}"
 
     #[test]
     fn pre_tracing_bootstrap_defaults_foreground_start_to_stdout() {
+        let _env = env_lock();
         let storage_dir = tempfile::tempdir().unwrap();
         let config_dir = tempfile::tempdir().unwrap();
         let config_path = config_dir.path().join("settings.toml");
@@ -800,6 +821,7 @@ destination = "{destination}"
 
     #[test]
     fn pre_tracing_bootstrap_uses_server_sink_for_server_restart_foreground() {
+        let _env = env_lock();
         let storage_dir = tempfile::tempdir().unwrap();
         let config_dir = tempfile::tempdir().unwrap();
         let config_path = config_dir.path().join("settings.toml");
@@ -831,6 +853,7 @@ destination = "{destination}"
 
     #[test]
     fn pre_tracing_bootstrap_explicit_file_keeps_foreground_start_on_file() {
+        let _env = env_lock();
         let storage_dir = tempfile::tempdir().unwrap();
         let config_dir = tempfile::tempdir().unwrap();
         let config_path = config_dir.path().join("settings.toml");
@@ -862,6 +885,7 @@ destination = "{destination}"
 
     #[test]
     fn pre_tracing_bootstrap_uses_server_sink_for_server_serve() {
+        let _env = env_lock();
         let storage_dir = tempfile::tempdir().unwrap();
         let config_dir = tempfile::tempdir().unwrap();
         let config_path = config_dir.path().join("settings.toml");
@@ -891,6 +915,7 @@ destination = "{destination}"
 
     #[test]
     fn pre_tracing_bootstrap_defaults_server_serve_to_file() {
+        let _env = env_lock();
         let storage_dir = tempfile::tempdir().unwrap();
         let config_dir = tempfile::tempdir().unwrap();
         let config_path = config_dir.path().join("settings.toml");
@@ -920,6 +945,7 @@ destination = "{destination}"
 
     #[test]
     fn pre_tracing_bootstrap_env_destination_overrides_config_file() {
+        let _env = env_lock();
         let storage_dir = tempfile::tempdir().unwrap();
         let config_dir = tempfile::tempdir().unwrap();
         let config_path = config_dir.path().join("settings.toml");
@@ -951,6 +977,7 @@ destination = "{destination}"
 
     #[test]
     fn pre_tracing_bootstrap_rejects_invalid_env_destination() {
+        let _env = env_lock();
         let storage_dir = tempfile::tempdir().unwrap();
         let config_dir = tempfile::tempdir().unwrap();
         let config_path = config_dir.path().join("settings.toml");
@@ -979,6 +1006,7 @@ destination = "{destination}"
 
     #[test]
     fn pre_tracing_bootstrap_rejects_invalid_config_log_level() {
+        let _env = env_lock();
         let storage_dir = tempfile::tempdir().unwrap();
         let config_dir = tempfile::tempdir().unwrap();
         let config_path = config_dir.path().join("settings.toml");
@@ -1006,6 +1034,7 @@ destination = "{destination}"
 
     #[test]
     fn pre_tracing_bootstrap_rejects_invalid_config_destination() {
+        let _env = env_lock();
         let storage_dir = tempfile::tempdir().unwrap();
         let config_dir = tempfile::tempdir().unwrap();
         let config_path = config_dir.path().join("settings.toml");
@@ -1033,6 +1062,7 @@ destination = "{destination}"
 
     #[test]
     fn pre_tracing_bootstrap_uses_worker_sink_for_run_worker() {
+        let _env = env_lock();
         let storage_dir = tempfile::tempdir().unwrap();
         let run_dir = tempfile::tempdir().unwrap();
         let cli = Cli::try_parse_from([
@@ -1068,6 +1098,7 @@ destination = "{destination}"
 
     #[test]
     fn pre_tracing_bootstrap_worker_uses_stdout_when_env_overrides() {
+        let _env = env_lock();
         let storage_dir = tempfile::tempdir().unwrap();
         let run_dir = tempfile::tempdir().unwrap();
         let cli = Cli::try_parse_from([

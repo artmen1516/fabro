@@ -175,6 +175,13 @@ async fn connect_local_api_client_bundle_with_dev_token(
 
 async fn connect_target_api_client_bundle(target: &ServerTarget) -> Result<Client> {
     let credential = resolve_target_credential(target)?;
+    connect_target_api_client_bundle_with_credential(target, credential).await
+}
+
+async fn connect_target_api_client_bundle_with_credential(
+    target: &ServerTarget,
+    credential: Option<Credential>,
+) -> Result<Client> {
     let oauth_session = refreshable_oauth(target, credential.as_ref());
     build_client(target.clone(), credential, oauth_session, None).await
 }
@@ -442,7 +449,10 @@ mod tests {
         });
 
         let target = ServerTarget::http_url(format!("http://{addr}")).unwrap();
-        let client = connect_target_api_client_bundle(&target).await.unwrap();
+        let client =
+            connect_target_api_client_bundle_with_credential(&target, None)
+                .await
+                .unwrap();
         let result = time::timeout(Duration::from_secs(5), client.get_health()).await;
 
         server.abort();

@@ -566,6 +566,7 @@ mod tests {
         ensure_storage_server_autostart_allowed, execute_daemon, prepare_foreground_server_log,
         try_health,
     };
+    use crate::test_support::env_lock;
 
     fn runtime() -> Runtime {
         Runtime::new().expect("runtime should build")
@@ -667,6 +668,7 @@ destination = "{destination}"
 
     #[test]
     fn execute_daemon_rejects_configured_stdout_before_creating_server_log() {
+        let _env = env_lock();
         let storage_dir = tempfile::tempdir().unwrap();
         let config_dir = tempfile::tempdir().unwrap();
         let config_path = config_dir.path().join("settings.toml");
@@ -698,6 +700,7 @@ destination = "{destination}"
 
     #[test]
     fn execute_daemon_rejects_invalid_env_destination_before_creating_server_log() {
+        let _env = env_lock();
         let storage_dir = tempfile::tempdir().unwrap();
         let config_dir = tempfile::tempdir().unwrap();
         let config_path = config_dir.path().join("settings.toml");

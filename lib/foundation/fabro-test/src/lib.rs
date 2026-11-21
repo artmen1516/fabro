@@ -2184,6 +2184,7 @@ impl TestContext {
 // ---------------------------------------------------------------------------
 
 use tokio::net::TcpListener as TokioTcpListener;
+use tokio::runtime::{Builder, Runtime};
 use tokio::sync::OnceCell;
 use tokio::time;
 pub use twin_github::AppState as GitHubAppState;
@@ -2553,43 +2554,119 @@ static TWIN_OPENAI: OnceCell<TwinOpenAi> = OnceCell::const_new();
 pub async fn twin_openai() -> &'static TwinOpenAi {
     TWIN_OPENAI
         .get_or_init(|| async {
-            let listener = TokioTcpListener::bind("127.0.0.1:0")
-                .await
-                .expect("bind twin-openai");
-            let addr = listener.local_addr().expect("local addr");
-            let base_url = format!("http://127.0.0.1:{}/v1", addr.port());
+            // The server must outlive whichever test runtime happens to start
+            // it first: `cargo test` runs every test of a target in one
+            // process, each with its own short-lived tokio runtime, so a
+            // `tokio::spawn` onto the first caller's runtime would kill the
+            // server when that test ends. Host the server on a leaked
+            // dedicated runtime instead; awaiting the init task's handle from
+            // the caller's runtime is fine.
+            twin_server_runtime()
+                .spawn(async {
+                    let listener = TokioTcpListener::bind("127.0.0.1:0")
+                        .await
+                        .expect("bind twin-openai");
+                    let addr = listener.local_addr().expect("local addr");
+                    let base_url = format!("http://127.0.0.1:{}/v1", addr.port());
 
-            let config = TwinConfig {
-                bind_addr: addr,
-                require_auth: true,
-                enable_admin: true,
-                ..TwinConfig::from_lookup(&|_| None).expect("twin-openai defaults should load")
-            };
-            let app =
-                twin_openai::build_app_with_config(config).expect("twin-openai app should build");
+                    let config = TwinConfig {
+                        bind_addr: addr,
+                        require_auth: true,
+                        enable_admin: true,
+                        ..TwinConfig::from_lookup(&|_| None)
+                            .expect("twin-openai defaults should load")
+                    };
+                    let app = twin_openai::build_app_with_config(config)
+                        .expect("twin-openai app should build");
 
-            tokio::spawn(async move {
-                axum::serve(listener, app).await.expect("twin-openai serve");
-            });
+                    tokio::spawn(async move {
+                        let result = axum::serve(listener, app).await;
+                        let stamp = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_secs_f64())
+                            .unwrap_or_default();
+                        let _ = std::fs::write(
+                            format!("/tmp/twin_debug_{}_{stamp}.txt", std::process::id()),
+                            format!("serve ended: {result:?}"),
+                        );
+                        result.expect("twin-openai serve");
+                    });
 
-            // Wait for server readiness
-            let client = test_http_client();
-            let healthz_url = format!("http://127.0.0.1:{}/healthz", addr.port());
-            for _ in 0..50 {
-                let response =
-                    time::timeout(Duration::from_millis(250), client.get(&healthz_url).send())
+                    // DEBUG MONITOR
+                    let pid = std::process::id();
+                    let monitor_port = addr.port();
+                    std::thread::spawn(move || {
+                        let start = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_secs_f64())
+                            .unwrap_or_default();
+                        let mut last_ok = true;
+                        loop {
+                            std::thread::sleep(std::time::Duration::from_millis(200));
+                            let ok = std::net::TcpStream::connect_timeout(
+                                &format!("127.0.0.1:{monitor_port}")
+                                    .parse()
+                                    .expect("monitor addr"),
+                                std::time::Duration::from_millis(100),
+                            )
+                            .is_ok();
+                            if ok != last_ok || true {
+                                let stamp = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .map(|d| d.as_secs_f64())
+                                    .unwrap_or_default();
+                                let line = format!("pid {pid} t={stamp}: reachable={ok} (started t={start})\n");
+                                use std::io::Write;
+                                if let Ok(mut f) = std::fs::OpenOptions::new()
+                                    .create(true)
+                                    .append(true)
+                                    .open(format!("/tmp/twin_monitor_{}.log", pid))
+                                {
+                                    let _ = f.write_all(line.as_bytes());
+                                }
+                                last_ok = ok;
+                                if !ok {
+                                    break;
+                                }
+                            }
+                        }
+                    });
+
+                    // Wait for server readiness
+                    let client = test_http_client();
+                    let healthz_url = format!("http://127.0.0.1:{}/healthz", addr.port());
+                    for _ in 0..50 {
+                        let response = time::timeout(
+                            Duration::from_millis(250),
+                            client.get(&healthz_url).send(),
+                        )
                         .await;
-                if let Ok(Ok(resp)) = response {
-                    let status = resp.status();
-                    if status == fabro_http::StatusCode::OK {
-                        return TwinOpenAi { base_url };
+                        if let Ok(Ok(resp)) = response {
+                            let status = resp.status();
+                            if status == fabro_http::StatusCode::OK {
+                                return TwinOpenAi { base_url };
+                            }
+                        }
+                        time::sleep(std::time::Duration::from_millis(10)).await;
                     }
-                }
-                time::sleep(std::time::Duration::from_millis(10)).await;
-            }
-            panic!("twin-openai failed to become ready");
+                    panic!("twin-openai failed to become ready");
+                })
+                .await
+                .expect("twin-openai init task should not panic")
         })
         .await
+}
+
+/// A long-lived runtime that keeps the shared twin-openai server running for
+/// the whole test process, independent of per-test runtimes.
+fn twin_server_runtime() -> &'static Runtime {
+    static RUNTIME: OnceLock<Runtime> = OnceLock::new();
+    RUNTIME.get_or_init(|| {
+        Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("twin-openai runtime should build")
+    })
 }
 
 /// Returns `(base_url, api_key)` for the current test.
