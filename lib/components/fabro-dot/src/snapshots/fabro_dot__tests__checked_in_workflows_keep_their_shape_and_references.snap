@@ -87,6 +87,12 @@ expression: report
   inline@implement_app
   inline@verify_app
   inline@fix_app
+.fabro/workflows/triage-implement/workflow.fabro: TriageImplement nodes=9 edges=11
+  inline@scout
+  inline@plan
+  inline@implement
+  inline@fixup
+  inline@publish
 test/dot-compatibility/acp-agent-chain.fabro: AcpAgentChain nodes=4 edges=3
   goal-inline
 test/dot-compatibility/human-default-choice.fabro: HumanDefaultChoice nodes=5 edges=5

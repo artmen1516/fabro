@@ -2580,56 +2580,9 @@ pub async fn twin_openai() -> &'static TwinOpenAi {
                         .expect("twin-openai app should build");
 
                     tokio::spawn(async move {
-                        let result = axum::serve(listener, app).await;
-                        let stamp = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map(|d| d.as_secs_f64())
-                            .unwrap_or_default();
-                        let _ = std::fs::write(
-                            format!("/tmp/twin_debug_{}_{stamp}.txt", std::process::id()),
-                            format!("serve ended: {result:?}"),
-                        );
-                        result.expect("twin-openai serve");
-                    });
-
-                    // DEBUG MONITOR
-                    let pid = std::process::id();
-                    let monitor_port = addr.port();
-                    std::thread::spawn(move || {
-                        let start = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map(|d| d.as_secs_f64())
-                            .unwrap_or_default();
-                        let mut last_ok = true;
-                        loop {
-                            std::thread::sleep(std::time::Duration::from_millis(200));
-                            let ok = std::net::TcpStream::connect_timeout(
-                                &format!("127.0.0.1:{monitor_port}")
-                                    .parse()
-                                    .expect("monitor addr"),
-                                std::time::Duration::from_millis(100),
-                            )
-                            .is_ok();
-                            if ok != last_ok || true {
-                                let stamp = std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .map(|d| d.as_secs_f64())
-                                    .unwrap_or_default();
-                                let line = format!("pid {pid} t={stamp}: reachable={ok} (started t={start})\n");
-                                use std::io::Write;
-                                if let Ok(mut f) = std::fs::OpenOptions::new()
-                                    .create(true)
-                                    .append(true)
-                                    .open(format!("/tmp/twin_monitor_{}.log", pid))
-                                {
-                                    let _ = f.write_all(line.as_bytes());
-                                }
-                                last_ok = ok;
-                                if !ok {
-                                    break;
-                                }
-                            }
-                        }
+                        axum::serve(listener, app)
+                            .await
+                            .expect("twin-openai serve");
                     });
 
                     // Wait for server readiness

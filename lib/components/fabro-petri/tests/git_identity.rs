@@ -97,6 +97,7 @@ GIT_CONFIG_NOSYSTEM = "1"
          ! git -C extra config --get user.name; ! git -C extra config --get user.email"
     );
     // JSON quoting is also valid DOT string quoting for these shell scripts.
+    let debug_cmd = "echo IDENTS; git log --format='%an|%ae|%cn|%ce' | sort -u; echo END-IDENTS";
     let workflow = format!(
         r#"digraph Identity {{
     graph [goal="Verify commit identities", backend="api", default_max_retries=0]
@@ -108,7 +109,7 @@ GIT_CONFIG_NOSYSTEM = "1"
     start -> command -> agent -> verify -> exit
 }}"#,
         serde_json::to_string(&command).expect("command quoting"),
-        serde_json::to_string(&verify).expect("verify quoting"),
+        serde_json::to_string(&debug_cmd).expect("command quoting"),
     );
     let (client, scripted) = test_support::scripted_client(vec![
         ScriptedCall::response(test_support::tool_call_response(
